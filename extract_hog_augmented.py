@@ -18,11 +18,6 @@ Pipeline:
        - labels   : (N,)         int64
        - metadata : (N,)         object (dicts: video_key, subject, action, ...)
 
-Usage:
-    python3 extract_hog_augmented.py \
-        --bbox_json ../hog/hog_person_data_new_7.json \
-        --output ../hog/hog_aug_7.npz \
-        --num_aug 4
 """
 
 import argparse

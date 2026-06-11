@@ -1,5 +1,7 @@
 # Recunoașterea acțiunilor umane (HAR) pe KTH cu rețele convoluționale 3D
 
+https://cnn-har-munteanu-mihai.streamlit.app/
+
 > Acest document descrie complet pipeline-ul CNN clasic implementat în folder-ul `cnn_har_app/`. Scopul lui este să servească drept contrapartidă (baseline CNN) a rețelei spiking convoluționale (CSNN) descrise în capitolele anterioare ale lucrării de licență, permițând astfel o comparație directă, în condiții echivalente (același set de date, aceeași segmentare temporală, aceiași descriptori HOG, **același split standard pe subiecți, identic cu cel folosit la CSNN**).
 >
 > Pipeline-ul este organizat astfel încât majoritatea componentelor scumpe (detecție de persoană, extragere HOG, augmentări spațiale și fotometrice) se precalculează *o singură dată* într-un fișier `.npz`. Antrenarea efectivă a CNN-ului citește acest tensor și se concentrează pe învățarea reprezentărilor spațio-temporale.
