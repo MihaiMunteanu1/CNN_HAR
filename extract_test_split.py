@@ -1,6 +1,6 @@
 """
-Extrage doar samples din split-ul "test" dintr-un .npz mare (train+val+test,
-cu augmentari) intr-un .npz mic, potrivit pentru commit in git (demo Streamlit).
+Extract only the samples from the "test" split from a large .npz file (train+val+test,
+with augmentations) into a small .npz file, suitable for committing to git (Streamlit demo).
 
 Usage:
     python extract_test_split.py --input ../hog/hog_aug_tvt_19_f10_g2_runfix.npz --output data/hog_test_only.npz
@@ -16,7 +16,6 @@ TEST_SUBJECTS = [2,3,5,6,7,8,9,10,22]
 
 
 def split_from_subject(subject_id: int) -> str:
-    """Determină split-ul ('test' sau 'train') pe baza ID-ului subiectului."""
     return "test" if subject_id in TEST_SUBJECTS else "train"
 
 

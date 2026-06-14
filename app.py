@@ -85,8 +85,6 @@ def fetch_video_frames(video_path: str, frame_indices: tuple):
 
 
 def select_preview_positions(bboxes, n=6):
-    """Alege ~n poziții (în T) pentru preview: cadre cu bbox valid, distribuite
-    uniform pe tot clipul (nu primele n). bboxes: array (T, 4) = (cx, cy, w, h)."""
     T = len(bboxes)
     valid = [i for i in range(T) if bboxes[i][2] > 0 and bboxes[i][3] > 0]
     pool = valid if len(valid) >= n else list(range(T))
@@ -127,7 +125,6 @@ st.caption(
     "Contrapartea clasică (CNN) a rețelei spiking (CSNN) descrisă în lucrare."
 )
 
-# Sidebar — model selection
 st.sidebar.header("Model")
 
 ckpt_pattern = os.path.join(MODEL_DIR, "har_conv3d_tvt19fix_s*.pth")

@@ -100,17 +100,11 @@ def train(args):
         print("Error: Train dataset is empty. Check your JSON path or data format.")
         return
 
-    # Distribuția pe clase în train. Pe KTH cu split tvt + T=19/g=10, clasa
-    # `running` e masiv sub-reprezentată (~1.6% din train) fiindcă alergătorul
-    # iese din cadru → puține grupuri valide. Fără corecție, modelul prezice
-    # mereu jogging pentru running (recall ~15%).
     train_labels = np.array([int(s[2]) for s in train_dataset.samples], dtype=np.int64)
     class_counts = np.bincount(train_labels, minlength=len(KTH_CLASSES))
     print("Train class counts: "
           + ", ".join(f"{c}={n}" for c, n in zip(KTH_CLASSES, class_counts.tolist())))
 
-    # WeightedRandomSampler: oversamplează clasele rare ca fiecare epoch să vadă
-    # clasele ~echilibrat. 'inv' = balans complet (w ∝ 1/count), 'sqrt_inv' = mai blând.
     sampler = None
     if args.balanced_sampler != "none":
         safe = np.maximum(class_counts, 1)
@@ -166,8 +160,6 @@ def train(args):
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Trainable params: {n_params/1e6:.2f}M")
 
-    # Pondere pe clase în loss (alternativă/complement la sampler). A NU stiva
-    # 'inv' peste un sampler 'inv' — dublă corecție => over-predicție pe running.
     loss_weight = None
     if args.class_weight_loss != "none":
         safe = np.maximum(class_counts, 1).astype(np.float64)

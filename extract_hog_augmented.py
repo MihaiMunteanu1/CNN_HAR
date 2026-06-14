@@ -320,8 +320,7 @@ def main():
     args = parser.parse_args()
 
     rng = np.random.default_rng(args.seed)
-    # Trebuie sa initializam HOG special pentru 32x64, altfel OpenCV
-    # asteapta 64x128 prin default si va da eroare
+
     hog_desc = cv2.HOGDescriptor(
         _winSize=(HOG_WIN_W, HOG_WIN_H),
         _blockSize=(16, 16),
@@ -422,8 +421,3 @@ def main():
 if __name__ == "__main__":
     main()
 
-# python3 extract_hog_augmented.py \
-#         --bbox_json ../hog/hog_person_data_tvt_19_f10_g2.json \
-#         --output   ../hog/hog_aug_tvt_19_f10_g2.npz \
-#         --num_aug 8 --aug_profile strong \
-#                                   --video_root /home/mmuntean/kth_organized_tvt
