@@ -24,7 +24,7 @@ VALID_SPLITS = ("train", "val", "test")
 
 
 def split_from_video_key(video_key):
-    head = video_key.replace("\\", "/").split("/", 1)[0]  # first path component
+    head = video_key.replace("\\", "/").split("/", 1)[0]
     return head if head in VALID_SPLITS else None
 
 HOG_WIN_W = 64
