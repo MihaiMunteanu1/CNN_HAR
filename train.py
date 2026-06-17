@@ -1,3 +1,15 @@
+"""
+Train the Conv3D HAR model on pre-computed HOG features (KTH).
+
+Loads the .npz dataset (train/val/test splits), builds HARConv3DNet, and trains
+with AdamW + CosineLR, optional mixup, label smoothing, EMA and early stopping on
+the val split. Saves the best checkpoint under models/ and finally reports the
+test accuracy and confusion matrix.
+
+Example:
+    python train.py --data_path ../hog/hog_aug_*.npz --seed 42 --save_suffix _s42
+"""
+
 import argparse
 import os
 
@@ -12,6 +24,9 @@ from model import build_model
 
 
 class ModelEMA:
+    """Exponential moving average of the model weights. Keeps a shadow copy that
+    is swapped in for evaluation/checkpointing and restored afterwards"""
+
     def __init__(self, model: nn.Module, decay: float = 0.999):
         self.decay = decay
         self.shadow = {
@@ -44,8 +59,6 @@ class ModelEMA:
 
 
 def mixup_data(x, y, alpha, device):
-    """Returns (mixed_x, y_a, y_b, lam) for mixup training.
-    When alpha <= 0 this is the identity transform (lam=1, y_a==y_b==y)."""
     if alpha <= 0:
         return x, y, y, 1.0
     lam = float(np.random.beta(alpha, alpha))
@@ -59,6 +72,9 @@ def mixup_criterion(criterion, pred, y_a, y_b, lam):
 
 
 def train(args):
+    """Full training loop: build the datasets and model, train with early stopping
+    on the val split (using EMA weights when active), then reload the best
+    checkpoint and report test accuracy and the confusion matrix."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
@@ -69,35 +85,33 @@ def train(args):
             torch.cuda.manual_seed_all(args.seed)
         print(f"Seed: {args.seed}")
 
-    use_image = args.model_type in ("cnn", "temporal", "conv3d")
-
     train_dataset = HOGDataset(
         args.data_path, split="train",
-        as_image=use_image, augment=args.augment,
+        as_image=True, augment=args.augment,
         noise_std=args.noise_std, feat_dropout_p=args.feat_dropout,
-        include_diff=args.include_diff and use_image,
-        include_bbox=args.include_bbox and use_image,
-        include_bbox_vel=args.include_bbox_vel and use_image,
+        include_diff=args.include_diff,
+        include_bbox=args.include_bbox,
+        include_bbox_vel=args.include_bbox_vel,
         temporal_reverse_p=args.temporal_reverse_p,
         temporal_shift_max=args.temporal_shift_max,
     )
     val_dataset = HOGDataset(
         args.data_path, split="val",
-        as_image=use_image, augment=False,
-        include_diff=args.include_diff and use_image,
-        include_bbox=args.include_bbox and use_image,
-        include_bbox_vel=args.include_bbox_vel and use_image,
+        as_image=True, augment=False,
+        include_diff=args.include_diff,
+        include_bbox=args.include_bbox,
+        include_bbox_vel=args.include_bbox_vel,
     )
     test_dataset = HOGDataset(
         args.data_path, split="test",
-        as_image=use_image, augment=False,
-        include_diff=args.include_diff and use_image,
-        include_bbox=args.include_bbox and use_image,
-        include_bbox_vel=args.include_bbox_vel and use_image,
+        as_image=True, augment=False,
+        include_diff=args.include_diff,
+        include_bbox=args.include_bbox,
+        include_bbox_vel=args.include_bbox_vel,
     )
 
     if len(train_dataset) == 0:
-        print("Error: Train dataset is empty. Check your JSON path or data format.")
+        print("Error: Train dataset is empty.")
         return
 
     train_labels = np.array([int(s[2]) for s in train_dataset.samples], dtype=np.int64)
@@ -117,13 +131,9 @@ def train(args):
         )
         print(f"WeightedRandomSampler activ (mode={args.balanced_sampler}).")
 
-    # Legacy NPZ files generated before the 8/8/9 reorganization have no val
-    # split. Use test as a stand-in so the loop still runs end-to-end, but warn
-    # loudly so the user knows the early-stop signal is not held-out anymore.
     use_val_for_stop = len(val_dataset) > 0
     if not use_val_for_stop:
-        print("WARN: val split empty in this dataset. Falling back to test for early stopping "
-              "(no held-out signal — regenerate the data with the new pipeline to fix).")
+        print("WARN: val split empty in this dataset")
         eval_dataset = test_dataset
     else:
         eval_dataset = val_dataset
@@ -144,11 +154,10 @@ def train(args):
     )
 
     sample_feature, _ = train_dataset[0]
-    print(f"Sample shape: {tuple(sample_feature.shape)} | model_type={args.model_type}")
+    print(f"Sample shape: {tuple(sample_feature.shape)} | model_type=conv3d")
 
     model = build_model(
         hog_shape=tuple(sample_feature.shape),
-        model_type=args.model_type,
         dropout=args.dropout,
     )
     model = model.to(device)
@@ -178,7 +187,7 @@ def train(args):
     best_acc = 0.0
     epochs_no_improve = 0
     os.makedirs("models", exist_ok=True)
-    save_path = os.path.join("models", f"har_{args.model_type}{args.save_suffix}.pth")
+    save_path = os.path.join("models", f"har_conv3d{args.save_suffix}.pth")
 
     for epoch in range(args.epochs):
         model.train()
@@ -257,9 +266,7 @@ def train(args):
 
     print(f"\nFinished. Best {eval_label.lower()} accuracy: {best_acc:.2f}%  (saved to {save_path})")
 
-    # Final unseen-data evaluation on the test set, regardless of whether val
-    # was available. When val was used for early stopping this gives the true
-    # generalization number; when test was the stand-in this reprints it.
+
     model.load_state_dict(torch.load(save_path, map_location=device))
     model.eval()
     test_correct = 0
@@ -289,54 +296,36 @@ def train(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_path", type=str, default="../hog/hog_aug_pose_g4.npz")
-    parser.add_argument("--model_type", type=str, default="conv3d",
-                        choices=["mlp", "cnn", "temporal", "conv3d"])
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight_decay", type=float, default=3e-4)
     parser.add_argument("--label_smoothing", type=float, default=0.02)
-    parser.add_argument("--dropout", type=float, default=0.2,
-                        help="Classifier-head dropout (lower = less regularization).")
-    parser.add_argument("--mixup", type=float, default=0.02,
-                        help="Mixup alpha; 0 disables.")
+    parser.add_argument("--dropout", type=float, default=0.2)
+    parser.add_argument("--mixup", type=float, default=0.02)
     parser.add_argument("--augment", action="store_true", default=True)
     parser.add_argument("--no_augment", dest="augment", action="store_false")
     parser.add_argument("--noise_std", type=float, default=0.003)
     parser.add_argument("--feat_dropout", type=float, default=0.015)
-    parser.add_argument("--temporal_reverse_p", type=float, default=0.2,
-                        help="Randomly reverse frame order during training.")
-    parser.add_argument("--temporal_shift_max", type=int, default=1,
-                        help="Max temporal shift (in frames) with zero padding.")
+    parser.add_argument("--temporal_reverse_p", type=float, default=0.2)
+    parser.add_argument("--temporal_shift_max", type=int, default=1)
     parser.add_argument("--grad_clip", type=float, default=1.0)
-    parser.add_argument("--ema_decay", type=float, default=0.999,
-                        help="EMA decay; 0 disables EMA.")
-    parser.add_argument("--ema_start", type=int, default=5,
-                        help="Start EMA updates after this epoch.")
-    parser.add_argument("--patience", type=int, default=60,
-                        help="Early-stop patience on test accuracy; 0 disables.")
+    parser.add_argument("--ema_decay", type=float, default=0.999)
+    parser.add_argument("--ema_start", type=int, default=5)
+    parser.add_argument("--patience", type=int, default=60)
     parser.add_argument("--num_workers", type=int, default=2)
-    parser.add_argument("--include_diff", action="store_true", default=True,
-                        help="Concatenate pseudo-motion stream (HOG_t - HOG_{t-1}).")
+    parser.add_argument("--include_diff", action="store_true", default=True)
     parser.add_argument("--no_include_diff", dest="include_diff", action="store_false")
-    parser.add_argument("--include_bbox", action="store_true", default=True,
-                        help="Concatenate bbox metadata (cx, cy, w, h) as 4 extra channels.")
+    parser.add_argument("--include_bbox", action="store_true", default=True)
     parser.add_argument("--no_include_bbox", dest="include_bbox", action="store_false")
-    parser.add_argument("--include_bbox_vel", action="store_true", default=True,
-                        help="Concatenate bbox deltas (dcx, dcy, dw, dh) as 4 extra channels.")
+    parser.add_argument("--include_bbox_vel", action="store_true", default=True)
     parser.add_argument("--no_include_bbox_vel", dest="include_bbox_vel", action="store_false")
     parser.add_argument("--balanced_sampler", type=str, default="inv",
-                        choices=["none", "inv", "sqrt_inv"],
-                        help="WeightedRandomSampler pe clase: 'inv'=balans complet (recomandat "
-                             "pentru running), 'sqrt_inv'=moderat, 'none'=dezactivat.")
+                        choices=["none", "inv", "sqrt_inv"])
     parser.add_argument("--class_weight_loss", type=str, default="none",
-                        choices=["none", "inv", "sqrt_inv"],
-                        help="Pondere pe clase în CrossEntropyLoss. NU folosi 'inv' simultan cu "
-                             "--balanced_sampler inv (dublă corecție).")
-    parser.add_argument("--seed", type=int, default=None,
-                        help="Random seed for reproducibility / ensemble runs.")
-    parser.add_argument("--save_suffix", type=str, default="",
-                        help="Suffix appended to checkpoint filename (e.g. _s0).")
+                        choices=["none", "inv", "sqrt_inv"])
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--save_suffix", type=str, default="")
     args = parser.parse_args()
 
     train(args)

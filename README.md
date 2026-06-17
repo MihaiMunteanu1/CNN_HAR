@@ -458,14 +458,11 @@ Combined with the `.npz` augmentations (offline), the model practically never se
 
 ## 7. Stage 4 — `model.py`
 
-The `model.py` file defines four architectures exposed via `build_model(model_type=...)`:
+The `model.py` file defines a single architecture, built via `build_model(...)`:
 
-| `model_type` | Class             | Input                  | Comment                                     |
-|--------------|-------------------|------------------------|---------------------------------------------|
-| `mlp`        | `HARLinearNet`    | $(B,\ T \cdot 3780)$   | Naive baseline on the flat vector           |
-| `cnn`        | `HARConvNet`      | $(B,\ T \cdot C,\ H,\ W)$ | Frames stacked on channels; 2D CNN       |
-| `temporal`   | `HARTemporalNet`  | $(B,\ T,\ C,\ H,\ W)$  | Per-frame encoder + BiGRU + attention       |
-| **`conv3d`** | **`HARConv3DNet`**| $(B,\ T,\ C,\ H,\ W)$  | **Main model**; dense 3D convolutions       |
+| Class             | Input                  | Comment                                     |
+|-------------------|------------------------|---------------------------------------------|
+| **`HARConv3DNet`**| $(B,\ T,\ C,\ H,\ W)$  | **Main model**; dense 3D convolutions       |
 
 **The production model is `HARConv3DNet`** (all results reported in Section 11 are obtained with this architecture).
 
@@ -738,7 +735,6 @@ cd cnn_har_app
 for s in 42 123 7 13 99; do
   python3 train.py \
     --data_path ../hog/hog_aug_tvt_19_f10_g2_runfix.npz \
-    --model_type conv3d \
     --balanced_sampler none \
     --seed $s \
     --save_suffix _tvt19fix_s$s \
@@ -756,7 +752,7 @@ done
 for i in 0 1 2 3; do
   seeds=(42 123 7 13); s=${seeds[$i]}
   HIP_VISIBLE_DEVICES=$i python3 train.py \
-    --data_path ../hog/hog_aug_tvt_19_f10_g2_runfix.npz --model_type conv3d \
+    --data_path ../hog/hog_aug_tvt_19_f10_g2_runfix.npz \
     --balanced_sampler none --seed $s --save_suffix _tvt19fix_s$s \
     --temporal_reverse_p 0.3 --temporal_shift_max 2 \
     > ../data/log_cnn_tvt19fix_s$s.txt 2>&1 &
@@ -805,7 +801,6 @@ For $M = 5$, `--tta_reverse --tta_shift 1`, this means **5 × (1 + 1 + 2) = 20 e
 ```bash
 python3 eval_ensemble.py \
     --data_path ../hog/hog_aug_tvt_19_f10_g2_runfix.npz \
-    --model_type conv3d \
     --checkpoints "models/har_conv3d_tvt19fix_s*.pth" \
     --ensemble_mode logits \
     --tta_reverse \
@@ -1010,7 +1005,6 @@ python3 extract_hog_augmented.py \
 for s in 42 123 7 13 99; do
   python3 train.py \
     --data_path ../hog/hog_aug_tvt_19_f10_g2_runfix.npz \
-    --model_type conv3d \
     --balanced_sampler none \
     --seed $s \
     --save_suffix _tvt19fix_s$s \
@@ -1024,7 +1018,6 @@ done
 # 4) Evaluate as ensemble with TTA:
 python3 eval_ensemble.py \
     --data_path ../hog/hog_aug_tvt_19_f10_g2_runfix.npz \
-    --model_type conv3d \
     --checkpoints "models/har_conv3d_tvt19fix_s*.pth" \
     --ensemble_mode logits \
     --tta_reverse \

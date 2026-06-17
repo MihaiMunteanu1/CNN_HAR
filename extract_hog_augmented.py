@@ -1,23 +1,11 @@
 """
-Pre-compute HOG features with on-line video augmentation, output as .npz.
-
-Pipeline:
-  1. Read bbox metadata JSON (output of src/tool/extract_bboxes_kth.py).
-  2. For each video, load the needed frames once.
-  3. For each (sample = group of T frames):
-       - Always emit the original variant (no augmentation).
-       - For TRAIN videos only, emit (num_aug - 1) augmented variants:
-           * horizontal flip (always one of the variants)
-           * random bbox jitter: dx ∈ [-5, +5], dy ∈ [-3, +3], scale ∈ [0.9, 1.1]
-           * random brightness/contrast: alpha ∈ [0.85, 1.15], beta ∈ [-15, +15]
-           * optional gamma/blur/noise (profile dependent)
-       - For each variant: crop bbox → resize 64×128 → flip/brightness → HOG.
-  4. Save all samples to .npz with arrays:
-       - features : (N, T*3780) float32
-       - bboxes   : (N, T, 4)    float32 — (cx, cy, w, h) normalized to frame
-       - labels   : (N,)         int64
-       - metadata : (N,)         object (dicts: video_key, subject, action, ...)
-
+Pre-compute augmented HOG features for KTH and save them to a .npz.
+Reads the bbox metadata JSON, decodes each video once, and for every group of T
+frames computes a HOG descriptor per frame (crop bbox -> resize 64x128 -> HOG).
+Train videos also get num_aug augmented variants (flip, bbox jitter, brightness /
+gamma / blur / noise); val and test get the original variant only. The output
+.npz holds the features, bboxes, labels, metadata and config arrays consumed by
+HOGDataset.
 """
 
 import argparse
@@ -36,18 +24,13 @@ VALID_SPLITS = ("train", "val", "test")
 
 
 def split_from_video_key(video_key):
-    head = video_key.replace("\\", "/").split("/", 1)[0]
+    head = video_key.replace("\\", "/").split("/", 1)[0]  # first path component
     return head if head in VALID_SPLITS else None
 
 HOG_WIN_W = 64
 HOG_WIN_H = 128
 HOG_FEAT_PER_FRAME = 3780  # cv2 default HOG on 64x128
 
-# Varianta 32x64 (756 feat/frame, grila 3x7) e INCOMPATIBILA cu HARConv3DNet:
-# cele doua MaxPool3d(2,2,2) colapseaza latimea W=3 -> 1 -> 0. Pastreaza 64x128.
-# HOG_WIN_W = 32
-# HOG_WIN_H = 64
-# HOG_FEAT_PER_FRAME = 756
 
 def parse_kth_filename(filename):
     name = Path(filename).name
@@ -62,12 +45,15 @@ def parse_kth_filename(filename):
 
 
 def jitter_bbox(bbox, frame_w, frame_h, dx, dy, scale):
-    cx = bbox["x"] + bbox["w"] / 2.0
+    """Augment a bbox: scale it about its center, then translate by (dx, dy).
+    The result is clamped so it stays fully inside the frame."""
+    cx = bbox["x"] + bbox["w"] / 2.0          # current center
     cy = bbox["y"] + bbox["h"] / 2.0
-    new_w = max(1, int(bbox["w"] * scale))
+    new_w = max(1, int(bbox["w"] * scale))    # scaled size
     new_h = max(1, int(bbox["h"] * scale))
-    new_x = int(cx - new_w / 2.0 + dx)
+    new_x = int(cx - new_w / 2.0 + dx)        # re-center scaled box, then shift
     new_y = int(cy - new_h / 2.0 + dy)
+
     new_x = max(0, min(new_x, frame_w - 1))
     new_y = max(0, min(new_y, frame_h - 1))
     new_w = max(1, min(new_w, frame_w - new_x))
@@ -76,6 +62,7 @@ def jitter_bbox(bbox, frame_w, frame_h, dx, dy, scale):
 
 
 def apply_gamma_u8(img_u8, gamma):
+    """gamma correction to a uint8 image via a 256-entry lookup table"""
     if gamma == 1.0:
         return img_u8
     inv = 1.0 / max(gamma, 1e-6)
@@ -85,12 +72,12 @@ def apply_gamma_u8(img_u8, gamma):
 
 
 def compute_hog_with_aug(frame_bgr, bbox, aug, hog_desc, frame_w, frame_h, rng):
-    """
-    Apply aug to (bbox, frame), crop, resize 64x128, flip + brightness, HOG.
+    """Build the HOG vector for one frame under one augmentation spec.
 
-    Returns:
-        (hog_vec_flat (3780,) float32, post_aug_bbox dict) or (None, None) on failure.
-    """
+    Pipeline: jitter the bbox -> crop -> resize to 64x128 -> optional flip /
+    brightness-contrast / gamma / blur / Gaussian noise -> grayscale -> HOG.
+    Returns (hog_vector, post_box) where post_box is the bbox expressed in the
+    augmented image's coordinates, or (None, None) if the crop/HOG is empty."""
     box = jitter_bbox(bbox, frame_w, frame_h, aug["dx"], aug["dy"], aug["scale"])
 
     x, y, w, h = box["x"], box["y"], box["w"], box["h"]
@@ -98,11 +85,11 @@ def compute_hog_with_aug(frame_bgr, bbox, aug, hog_desc, frame_w, frame_h, rng):
     if crop.size == 0:
         return None, None
 
-    crop = cv2.resize(crop, (HOG_WIN_W, HOG_WIN_H))
+    crop = cv2.resize(crop, (HOG_WIN_W, HOG_WIN_H))   # fixed HOG window
     if aug["flip"]:
-        crop = cv2.flip(crop, 1)
+        crop = cv2.flip(crop, 1)                       # horizontal mirror
     if aug["alpha"] != 1.0 or aug["beta"] != 0:
-        crop = cv2.convertScaleAbs(crop, alpha=aug["alpha"], beta=aug["beta"])
+        crop = cv2.convertScaleAbs(crop, alpha=aug["alpha"], beta=aug["beta"])  # contrast/brightness
     if aug["gamma"] != 1.0:
         crop = apply_gamma_u8(crop, aug["gamma"])
     if aug["blur_ksize"] > 0:
@@ -118,8 +105,7 @@ def compute_hog_with_aug(frame_bgr, bbox, aug, hog_desc, frame_w, frame_h, rng):
     if feat is None:
         return None, None
 
-    # Bbox stored in conceptual (post-flip) coords so the bbox stream is
-    # consistent with the HOG content for the model.
+
     if aug["flip"]:
         post_box = dict(box)
         post_box["x"] = frame_w - box["x"] - box["w"]
@@ -149,6 +135,7 @@ def load_video_frames(video_path, frame_indices, frame_w, frame_h):
 
 
 def build_aug_cfg(args):
+    """Return the augmentation ranges for the chosen profil"""
     if args.aug_profile == "strong":
         cfg = {
             "scale_min": 0.88,
@@ -188,8 +175,10 @@ def build_aug_cfg(args):
 
 
 def make_aug_specs(num_aug, rng, aug_cfg):
-    """Build a list of augmentation specs. First is always 'orig' (identity)."""
+    """Spec 0 is original, spec 1: horiz flip, the rest are random jit"""
     pad = aug_cfg.get("bbox_padding", 1.25)
+
+    #v0
     specs = [{
         "name": "orig", "flip": False, "scale": 1.0 * pad,
         "dx": 0, "dy": 0, "alpha": 1.0, "beta": 0.0,
@@ -198,13 +187,14 @@ def make_aug_specs(num_aug, rng, aug_cfg):
     if num_aug <= 1:
         return specs
 
-    # Always include a pure horizontal flip.
+    #v1
     specs.append({
         "name": "flip", "flip": True, "scale": 1.0 * pad,
         "dx": 0, "dy": 0, "alpha": 1.0, "beta": 0.0,
         "gamma": 1.0, "noise_std": 0.0, "blur_ksize": 0,
     })
 
+    #rest
     for j in range(num_aug - 2):
         use_noise = rng.random() < aug_cfg["noise_p"]
         use_blur = rng.random() < aug_cfg["blur_p"]
@@ -225,12 +215,6 @@ def make_aug_specs(num_aug, rng, aug_cfg):
 
 def process_video(video_key, video_data, video_root, frame_w, frame_h,
                   num_aug, hog_desc, rng, aug_cfg):
-    """
-    Yields (sample_features (T*3780,), sample_bboxes (T, 4), label_idx, meta_dict)
-    for each (group, augmentation) tuple of this video.
-
-    Bboxes are normalized to [0, 1] (cx, cy, w, h).
-    """
     subject, action = parse_kth_filename(video_key)
     if subject is None or action is None:
         return
@@ -256,6 +240,8 @@ def process_video(video_key, video_data, video_root, frame_w, frame_h,
     if not frames:
         return
 
+    #augment only train videos
+    #val/test -> original
     aug_specs = make_aug_specs(num_aug if split == "train" else 1, rng, aug_cfg)
 
     for ai, aug in enumerate(aug_specs):
@@ -280,6 +266,7 @@ def process_video(video_key, video_data, video_root, frame_w, frame_h,
                     break
 
                 feats[fi] = hog_vec
+
                 cx = (post_box["x"] + post_box["w"] / 2.0) / frame_w
                 cy = (post_box["y"] + post_box["h"] / 2.0) / frame_h
                 boxes[fi] = [cx, cy, post_box["w"] / frame_w, post_box["h"] / frame_h]
@@ -303,18 +290,12 @@ def process_video(video_key, video_data, video_root, frame_w, frame_h,
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--bbox_json", type=str, required=True,
-                        help="Input JSON from extract_bboxes_kth.py")
-    parser.add_argument("--output", type=str, required=True,
-                        help="Output .npz path with pre-computed augmented HOG features")
+    parser.add_argument("--bbox_json", type=str, required=True)
+    parser.add_argument("--output", type=str, required=True)
     parser.add_argument("--video_root", type=str, default="/home/mmuntean/kth_organized")
-    parser.add_argument("--num_aug", type=int, default=4,
-                        help="Variants per train video (1 orig + N-1 augs). Test always 1.")
-    parser.add_argument("--aug_profile", type=str, default="mild",
-                        choices=["mild", "strong"],
-                        help="Augment profile controlling jitter/photometric ranges.")
-    parser.add_argument("--bbox_padding", type=float, default=1.25,
-                        help="Factor de scalare universal aplicat înainte de crop (1.25 = 25% margine de siguranță)")
+    parser.add_argument("--num_aug", type=int, default=4)
+    parser.add_argument("--aug_profile", type=str, default="mild",choices=["mild", "strong"])
+    parser.add_argument("--bbox_padding", type=float, default=1.25)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--report_every", type=int, default=25)
     args = parser.parse_args()
@@ -328,7 +309,6 @@ def main():
         _cellSize=(8, 8),
         _nbins=9,
     )
-    # hog_desc = cv2.HOGDescriptor() pentru 64x128 default
     aug_cfg = build_aug_cfg(args)
 
 
@@ -375,7 +355,7 @@ def main():
                   f"| total samples so far: {len(feats_list)}")
 
     if not feats_list:
-        raise SystemExit("No samples produced. Check video_root paths and bbox JSON.")
+        raise SystemExit("No samples produced.")
 
     features = np.stack(feats_list, axis=0)
     bboxes = np.stack(boxes_list, axis=0)
@@ -385,7 +365,7 @@ def main():
     split_counts = {s: sum(1 for m in meta_list if m["split"] == s) for s in VALID_SPLITS}
 
     print()
-    print("Statistics:")
+    print("Stats:")
     print(f"  total samples : {len(meta_list)}")
     for s in VALID_SPLITS:
         print(f"  {s:5s} samples : {split_counts[s]}  (from {video_counts[s]} videos)")
@@ -395,6 +375,7 @@ def main():
     out_path = args.output
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     print(f"\nSaving to {out_path} ...")
+
     np.savez(
         out_path,
         features=features,
@@ -415,7 +396,7 @@ def main():
             dtype=object,
         ),
     )
-    print("Done.")
+    print("Done")
 
 
 if __name__ == "__main__":

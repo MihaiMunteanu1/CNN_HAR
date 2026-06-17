@@ -1,14 +1,6 @@
 """
 Streamlit demo for KTH Human Action Recognition.
-
-Loads one or more trained Conv3D checkpoints and runs real inference on
-test-split clips. Optionally averages softmax outputs across checkpoints
-(ensemble).
-
-Run:
-    cd cnn_har_app
-    pip install streamlit
-    streamlit run app.py
+Loads one or more trained Conv3D checkpoints and runs real inference on test-split clips.
 """
 
 import glob
@@ -40,7 +32,6 @@ KTH_DISPLAY = {
 }
 
 
-# --- caches -----------------------------------------------------------------
 
 @st.cache_resource(show_spinner=False)
 def load_test_dataset():
@@ -53,11 +44,11 @@ def load_test_dataset():
 
 
 @st.cache_resource(show_spinner=False)
-def load_models(checkpoint_paths_tuple, model_type, sample_shape):
+def load_models(checkpoint_paths_tuple, sample_shape):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     models = []
     for path in checkpoint_paths_tuple:
-        m = build_model(hog_shape=sample_shape, model_type=model_type)
+        m = build_model(hog_shape=sample_shape)
         m.load_state_dict(torch.load(path, map_location=device))
         m.to(device).eval()
         models.append(m)
@@ -94,10 +85,9 @@ def select_preview_positions(bboxes, n=6):
     return sorted({pool[p] for p in picks})
 
 
-# --- inference --------------------------------------------------------------
-
 
 def predict(models, x, device, ensemble_mode):
+    """Run the ensemble on a single sample and return averaged class probabilities"""
     x = x.unsqueeze(0).to(device)
     with torch.no_grad():
         logits_sum = None
@@ -115,14 +105,13 @@ def predict(models, x, device, ensemble_mode):
     return torch.softmax(avg_logits, dim=1).squeeze(0).cpu().numpy()
 
 
-# --- UI ---------------------------------------------------------------------
 
-st.set_page_config(page_title="CNN for HAR — KTH", page_icon="🎥", layout="wide")
+st.set_page_config(page_title="CNN for HAR — KTH", layout="wide")
 st.title("Human Action Recognition — KTH")
 st.caption(
-    "Inferență reală pe clipuri din test split. "
+    "Inferență pe clipurile din test split. "
     "Model: 3D-CNN pe HOG features cu bbox metadata. "
-    "Contrapartea clasică (CNN) a rețelei spiking (CSNN) descrisă în lucrare."
+    "Baseline-ul CNN a rețelei spiking (CSNN) descrisă în lucrare."
 )
 
 st.sidebar.header("Model")
@@ -131,10 +120,7 @@ ckpt_pattern = os.path.join(MODEL_DIR, "har_conv3d_tvt19fix_s*.pth")
 ckpts = sorted(glob.glob(ckpt_pattern))
 if not ckpts:
     st.error(
-        f"Nu există checkpoint-uri la `{ckpt_pattern}`. "
-        "Antrenează modelul întâi:\n\n"
-        "```\npython3 train.py --data_path ../hog/hog_aug_tvt_19_f10_g2_runfix.npz "
-        "--balanced_sampler none --save_suffix _tvt19fix_s42\n```"
+        f"Nu există checkpoint-uri la `{ckpt_pattern}`.\n "
     )
     st.stop()
 
@@ -146,7 +132,7 @@ def format_ckpt_name(path):
     return base
 
 selected_ckpts = st.sidebar.multiselect(
-    "Checkpoint(uri) Conv3D pentru ensemble",
+    "Checkpoint-uri Conv3D pentru ensemble",
     options=ckpts,
     default=ckpts,
     format_func=format_ckpt_name,
@@ -165,7 +151,6 @@ ensemble_mode = st.sidebar.selectbox(
     format_func=lambda m: "Mean logits (recommended)" if m == "logits" else "Mean softmax",
 )
 
-# Load
 with st.spinner("Se încarcă setul de test..."):
     dataset = load_test_dataset()
 
@@ -178,9 +163,8 @@ sample_shape = tuple(sample_x.shape)
 st.sidebar.text(f"Input shape: {sample_shape}")
 
 with st.spinner(f"Se încarcă {len(selected_ckpts)} checkpoint(uri)..."):
-    models, device = load_models(tuple(selected_ckpts), "conv3d", sample_shape)
+    models, device = load_models(tuple(selected_ckpts), sample_shape)
 
-# st.sidebar.text(f"Device: {device}")
 st.sidebar.text(f"Test samples: {len(dataset)}")
 
 with st.sidebar.expander("Despre arhitectură"):
@@ -196,7 +180,6 @@ with st.sidebar.expander("Despre arhitectură"):
     )
 
 st.sidebar.divider()
-# Filter UI
 st.subheader("1. Alege un clip de test")
 
 col1, col2, col3 = st.columns(3)
@@ -225,11 +208,10 @@ with col3:
 selected_idx = matching[group_pos]
 selected_meta = dataset.metadata[selected_idx]
 st.markdown(
-    f"📁 Selectat: `{selected_meta['video_key']}`" #— group #{selected_meta['group_idx']} "
-    # f"— frame-uri {selected_meta['frame_indices']}"
+    f"📁 Selectat: `{selected_meta['video_key']}`"
 )
 
-run = st.button("🎯 Clasifică", type="primary")
+run = st.button("Clasifică", type="primary")
 
 if run:
     sample_x, gt_label = dataset[selected_idx]
@@ -275,14 +257,12 @@ if run:
                 tag = " ← ground truth"
             st.progress(int(probs[i] * 100), text=f"{disp}: {probs[i]*100:.1f}%{tag}")
 
-    # Frame preview — 5-6 cadre bune (cu bbox valid), distribuite pe tot clipul
     st.subheader("3. Frame-uri sursă (cu Bounding Box)")
     video_path = Path(VIDEO_ROOT) / selected_meta["video_key"]
     if video_path.exists():
         frame_indices = selected_meta["frame_indices"]
         frames = fetch_video_frames(str(video_path), tuple(frame_indices))
         if frames and len(frames) == len(frame_indices):
-            # bboxes (T, 4) din lista de samples a dataset-ului
             _, bboxes, _ = dataset.samples[selected_idx]
 
             positions = select_preview_positions(bboxes, n=6)
@@ -298,18 +278,18 @@ if run:
                 if w > 0 and h > 0:
                     x1, y1 = int((cx - w / 2) * w_img), int((cy - h / 2) * h_img)
                     x2, y2 = int((cx + w / 2) * w_img), int((cy + h / 2) * h_img)
-                    cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)  # verde
+                    cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
-                col.image(img, caption=f"frame {fi}", use_container_width=True)
+                col.image(img, caption=f"frame {fi}", width='stretch')
         elif frames:
             st.info(
-                f"Am extras {len(frames)}/{len(frame_indices)} cadre (unele frame-uri "
-                "lipsesc la decodare) — preview-ul cu bbox necesită aliniere completă."
+                f"Extras: {len(frames)}/{len(frame_indices)} cadre (unele frame-uri "
+                "lipsesc)."
             )
         else:
-            st.info("Video găsit dar nu pot extrage frame-urile (codec?).")
+            st.info("Video gasit, nu se pot extrage frame-urile.")
     else:
-        st.info(f"Video sursă lipsește la `{video_path}` — nu pot afișa frame-urile.")
+        st.info(f"Video sursa lipseste la `{video_path}`")
 
 st.divider()
 st.caption(

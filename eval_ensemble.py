@@ -1,13 +1,7 @@
 """
-Evaluate an ensemble of trained HAR models on the KTH test split.
-
-Usage:
-    python3 eval_ensemble.py \
-        --checkpoints models/har_conv3d_s0.pth models/har_conv3d_s1.pth ... \
-        --data_path ../hog/hog_person_data_new_7.json
-
-Or use a glob pattern:
-    python3 eval_ensemble.py --checkpoints "models/har_conv3d_s*.pth"
+Evaluate an ensemble of trained Conv3D HAR checkpoints on the KTH test split.
+Loads every checkpoint , runs them over the test set, averages predictions across the
+ensemble and prints per-model accuracy, the ensemble accuracy, and the confusion matrix.
 """
 
 import argparse
@@ -54,10 +48,7 @@ def _temporal_shift_tensor(x: torch.Tensor, shift: int) -> torch.Tensor:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_path", type=str, default="../hog/hog_aug_7.npz")
-    parser.add_argument("--model_type", type=str, default="conv3d",
-                        choices=["mlp", "cnn", "temporal", "conv3d"])
-    parser.add_argument("--checkpoints", type=str, nargs="+", required=True,
-                        help="Paths or glob patterns to .pth checkpoints to ensemble.")
+    parser.add_argument("--checkpoints", type=str, nargs="+", required=True)
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--num_workers", type=int, default=2)
     parser.add_argument("--include_diff", action="store_true", default=True)
@@ -67,12 +58,9 @@ def main():
     parser.add_argument("--include_bbox_vel", action="store_true", default=True)
     parser.add_argument("--no_include_bbox_vel", dest="include_bbox_vel", action="store_false")
     parser.add_argument("--ensemble_mode", type=str, default="logits",
-                        choices=["logits", "softmax"],
-                        help="Aggregation mode across models (mean logits or mean softmax).")
-    parser.add_argument("--tta_reverse", action="store_true", default=False,
-                        help="Average predictions with temporal-reversed clips.")
-    parser.add_argument("--tta_shift", type=int, default=0,
-                        help="Temporal shift (frames) for TTA; adds +/- shift predictions.")
+                        choices=["logits", "softmax"])
+    parser.add_argument("--tta_reverse", action="store_true", default=False)
+    parser.add_argument("--tta_shift", type=int, default=0)
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -82,13 +70,12 @@ def main():
     if not ckpts:
         raise SystemExit(f"No checkpoints matched: {args.checkpoints}")
 
-    use_image = args.model_type in ("cnn", "temporal", "conv3d")
     test_dataset = HOGDataset(
         args.data_path, split="test",
-        as_image=use_image, augment=False,
-        include_diff=args.include_diff and use_image,
-        include_bbox=args.include_bbox and use_image,
-        include_bbox_vel=args.include_bbox_vel and use_image,
+        as_image=True, augment=False,
+        include_diff=args.include_diff,
+        include_bbox=args.include_bbox,
+        include_bbox_vel=args.include_bbox_vel,
     )
     test_loader = DataLoader(
         test_dataset, batch_size=args.batch_size, shuffle=False,
@@ -102,7 +89,7 @@ def main():
     print(f"\nLoading {len(ckpts)} checkpoint(s):")
     models = []
     for ckpt in ckpts:
-        m = build_model(hog_shape=sample_shape, model_type=args.model_type)
+        m = build_model(hog_shape=sample_shape)
         m.load_state_dict(torch.load(ckpt, map_location=device))
         m.to(device).eval()
         models.append(m)
@@ -132,7 +119,7 @@ def main():
 
             tta_logits_sum = logits_sum
             tta_probs_sum = probs_sum
-            if use_image and (args.tta_reverse or args.tta_shift > 0):
+            if args.tta_reverse or args.tta_shift > 0:
                 if args.tta_reverse:
                     flipped = torch.flip(inputs, dims=[1])
                     for m in models:
@@ -156,13 +143,13 @@ def main():
 
             if args.ensemble_mode == "softmax":
                 denom = len(models)
-                if use_image and (args.tta_reverse or args.tta_shift > 0):
+                if args.tta_reverse or args.tta_shift > 0:
                     denom += (len(models) if args.tta_reverse else 0) + (2 * len(models) if args.tta_shift > 0 else 0)
                 avg_probs = tta_probs_sum / max(denom, 1)
                 preds = avg_probs.argmax(1)
             else:
                 denom = len(models)
-                if use_image and (args.tta_reverse or args.tta_shift > 0):
+                if args.tta_reverse or args.tta_shift > 0:
                     denom += (len(models) if args.tta_reverse else 0) + (2 * len(models) if args.tta_shift > 0 else 0)
                 avg_logits = tta_logits_sum / max(denom, 1)
                 preds = avg_logits.argmax(1)
