@@ -24,8 +24,7 @@ from model import build_model
 
 
 class ModelEMA:
-    """Exponential moving average of the model weights. Keeps a shadow copy that
-    is swapped in for evaluation/checkpointing and restored afterwards"""
+    """Exponential moving average of the model weights."""
 
     def __init__(self, model: nn.Module, decay: float = 0.999):
         self.decay = decay

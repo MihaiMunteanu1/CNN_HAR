@@ -45,8 +45,7 @@ def parse_kth_filename(filename):
 
 
 def jitter_bbox(bbox, frame_w, frame_h, dx, dy, scale):
-    """Augment a bbox: scale it about its center, then translate by (dx, dy).
-    The result is clamped so it stays fully inside the frame."""
+    """Augment a bbox: scale it about its center, then translate by (dx, dy)"""
     cx = bbox["x"] + bbox["w"] / 2.0          # current center
     cy = bbox["y"] + bbox["h"] / 2.0
     new_w = max(1, int(bbox["w"] * scale))    # scaled size
@@ -62,7 +61,6 @@ def jitter_bbox(bbox, frame_w, frame_h, dx, dy, scale):
 
 
 def apply_gamma_u8(img_u8, gamma):
-    """gamma correction to a uint8 image via a 256-entry lookup table"""
     if gamma == 1.0:
         return img_u8
     inv = 1.0 / max(gamma, 1e-6)
@@ -72,12 +70,7 @@ def apply_gamma_u8(img_u8, gamma):
 
 
 def compute_hog_with_aug(frame_bgr, bbox, aug, hog_desc, frame_w, frame_h, rng):
-    """Build the HOG vector for one frame under one augmentation spec.
-
-    Pipeline: jitter the bbox -> crop -> resize to 64x128 -> optional flip /
-    brightness-contrast / gamma / blur / Gaussian noise -> grayscale -> HOG.
-    Returns (hog_vector, post_box) where post_box is the bbox expressed in the
-    augmented image's coordinates, or (None, None) if the crop/HOG is empty."""
+    """Build the HOG vector for one frame under one augmentation spec"""
     box = jitter_bbox(bbox, frame_w, frame_h, aug["dx"], aug["dy"], aug["scale"])
 
     x, y, w, h = box["x"], box["y"], box["w"], box["h"]
@@ -135,7 +128,7 @@ def load_video_frames(video_path, frame_indices, frame_w, frame_h):
 
 
 def build_aug_cfg(args):
-    """Return the augmentation ranges for the chosen profil"""
+    """Return the augmentation ranges for the chosen profile"""
     if args.aug_profile == "strong":
         cfg = {
             "scale_min": 0.88,

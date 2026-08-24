@@ -1,12 +1,5 @@
 """
 PyTorch Dataset for KTH HOG features.
-
-HOGDataset loads either a pre-computed .npz (output of extract_hog_augmented.py)
-or a bbox-only .json (HOG recomputed at load time), filters samples by split, and
-yields per-sample tensors. With as_image=True it reshapes the flat HOG vector into
-a (T, C, H, W) tensor and can append extra channel streams (motion via HOG diff,
-bbox, bbox-velocity), plus online train-time augmentation (Gaussian noise, feature
-dropout, temporal reverse/shift).
 """
 
 import json
@@ -124,17 +117,6 @@ def _extract_groups_from_video(video_path, groups, frame_w, frame_h):
 class HOGDataset(Dataset):
     """
     HOG features dataset for KTH.
-    Args:
-        json_path: path to .json (bbox-only) or .npz (pre-computed) file.
-        split: "train", "val", or "test"
-        video_root: path containing the KTH video files (only used for .json).
-        transform: optional callable applied to feature tensor
-        as_image: if True, returns tensor of shape (T, C=36, H=15, W=7) for the
-                  Conv3D model. If False, returns the flat vector (T*3780,).
-        augment: if True (only on train split), applies feature-level
-                 augmentation: Gaussian noise + random feature dropout.
-        noise_std: std of additive Gaussian noise (input is in [0,1]).
-        feat_dropout_p: probability per feature of being zero-masked.
     """
 
     def __init__(self, json_path, split="train",
@@ -259,7 +241,6 @@ class HOGDataset(Dataset):
         return torch.cat([seq[shift:], pad], dim=0)
 
     def _temporal_augment(self, x: torch.Tensor, bbox: torch.Tensor):
-        """Apply random temporal reverse and/or shift to the frame sequence"""
         T = x.numel() // HOG_FEAT_PER_FRAME
         if T <= 1:
             return x, bbox

@@ -86,21 +86,13 @@ def select_preview_positions(bboxes, n=6):
 
 
 
-def predict(models, x, device, ensemble_mode):
-    """Run the ensemble on a single sample and return averaged class probabilities"""
+def predict(models, x, device):
     x = x.unsqueeze(0).to(device)
     with torch.no_grad():
         logits_sum = None
-        probs_sum = None
         for m in models:
             logits = m(x)
-            if ensemble_mode == "softmax":
-                p = torch.softmax(logits, dim=1)
-                probs_sum = p if probs_sum is None else probs_sum + p
-            else:
-                logits_sum = logits if logits_sum is None else logits_sum + logits
-    if ensemble_mode == "softmax":
-        return (probs_sum / len(models)).squeeze(0).cpu().numpy()
+            logits_sum = logits if logits_sum is None else logits_sum + logits
     avg_logits = logits_sum / len(models)
     return torch.softmax(avg_logits, dim=1).squeeze(0).cpu().numpy()
 
@@ -111,7 +103,7 @@ st.title("Human Action Recognition — KTH")
 st.caption(
     "Inferență pe clipurile din test split. "
     "Model: 3D-CNN pe HOG features cu bbox metadata. "
-    "Baseline-ul CNN a rețelei spiking (CSNN) descrisă în lucrare."
+    "Baseline-ul CNN a rețelei spiking CSNN."
 )
 
 st.sidebar.header("Model")
@@ -120,7 +112,7 @@ ckpt_pattern = os.path.join(MODEL_DIR, "har_conv3d_tvt19fix_s*.pth")
 ckpts = sorted(glob.glob(ckpt_pattern))
 if not ckpts:
     st.error(
-        f"Nu există checkpoint-uri la `{ckpt_pattern}`.\n "
+        f"Nu exista checkpoint-uri la `{ckpt_pattern}`.\n "
     )
     st.stop()
 
@@ -138,44 +130,36 @@ selected_ckpts = st.sidebar.multiselect(
     format_func=format_ckpt_name,
 )
 if not selected_ckpts:
-    st.warning("Selectează cel puțin un checkpoint.")
+    st.warning("Selecteaza cel putin un checkpoint.")
     st.stop()
 
 mode = "Ensemble" if len(selected_ckpts) > 1 else "Single model"
 st.sidebar.markdown(f"**Mod**: {mode} ({len(selected_ckpts)} model)")
 
-ensemble_mode = st.sidebar.selectbox(
-    "Ensemble mode",
-    options=["logits", "softmax"],
-    index=0,
-    format_func=lambda m: "Mean logits (recommended)" if m == "logits" else "Mean softmax",
-)
-
-with st.spinner("Se încarcă setul de test..."):
+with st.spinner("Se incarca setul de test..."):
     dataset = load_test_dataset()
 
 if not dataset.metadata:
-    st.error("Setul de test e gol sau metadata nu e populată. Verifică json-ul.")
+    st.error("Setul de test e gol")
     st.stop()
 
 sample_x, _ = dataset[0]
 sample_shape = tuple(sample_x.shape)
-st.sidebar.text(f"Input shape: {sample_shape}")
+# st.sidebar.text(f"Input shape: {sample_shape}")
 
-with st.spinner(f"Se încarcă {len(selected_ckpts)} checkpoint(uri)..."):
+with st.spinner(f"Se incarca {len(selected_ckpts)} checkpoint(uri)..."):
     models, device = load_models(tuple(selected_ckpts), sample_shape)
 
 st.sidebar.text(f"Test samples: {len(dataset)}")
 
-with st.sidebar.expander("Despre arhitectură"):
+with st.sidebar.expander("Despre arhitectura"):
     n_params = sum(p.numel() for p in models[0].parameters() if p.requires_grad)
     st.markdown(
         f"""
 - **HARConv3DNet** — 3 blocuri Conv3D (kernel 3×3×3) peste tensor `(C={sample_shape[1]}, T={sample_shape[0]}, H={sample_shape[2]}, W={sample_shape[3]})`
-- Input: HOG (36) + diff (36) + bbox (4) + bbox_vel (4) = 80 canale per frame
 - Trainable params: **{n_params/1e6:.2f}M**
-- Split tvt (8/8/9 subiecți): train 11-18, val {{19,20,21,23,24,25,1,4}}, test {{2,3,5,6,7,8,9,10,22}}
-- Augmentări: mixup α=0.02, Gaussian noise, label smoothing 0.02
+- Split tvt (8/8/9 subiecti): train 11-18, val {{19,20,21,23,24,25,1,4}}, test {{2,3,5,6,7,8,9,10,22}}
+- Augmentari: mixup α=0.02, Gaussian noise, label smoothing 0.02
 """
     )
 
@@ -211,11 +195,11 @@ st.markdown(
     f"📁 Selectat: `{selected_meta['video_key']}`"
 )
 
-run = st.button("Clasifică", type="primary")
+run = st.button("Clasifica", type="primary")
 
 if run:
     sample_x, gt_label = dataset[selected_idx]
-    probs = predict(models, sample_x, device, ensemble_mode)
+    probs = predict(models, sample_x, device)
     pred_idx = int(np.argmax(probs))
     pred_class = KTH_CLASSES[pred_idx]
     gt_class = KTH_CLASSES[gt_label]
@@ -230,34 +214,34 @@ if run:
         marker = "✅" if is_correct else "❌"
         if is_correct:
             st.success(
-                f"{marker} **Predicție corectă**: {KTH_DISPLAY[pred_class]} "
-                f"({confidence:.1f}% confidență)"
+                f"{marker} **Predictie corecta**: {KTH_DISPLAY[pred_class]} "
+                f"({confidence:.1f}% confidence)"
             )
         else:
             st.error(
-                f"{marker} **Predicție greșită**: {KTH_DISPLAY[pred_class]} "
-                f"({confidence:.1f}% confidență) — corect era {KTH_DISPLAY[gt_class]}"
+                f"{marker} **Predictie gresita**: {KTH_DISPLAY[pred_class]} "
+                f"({confidence:.1f}% confidence) — corect era {KTH_DISPLAY[gt_class]}"
             )
         st.markdown(f"**Ground truth**: {KTH_DISPLAY[gt_class]}")
         st.markdown(
-            f"**Mod inferență**: {len(models)} model"
-            + (f"e (mean {ensemble_mode})" if len(models) > 1 else "")
+            f"**Mod inferenta**: {len(models)} model"
+            + ("e (mean logits)" if len(models) > 1 else "")
         )
 
     with res_col2:
-        st.markdown("**Distribuția probabilităților**")
+        st.markdown("**Distributia probabilitatilor**")
         order = np.argsort(probs)[::-1]
         for i in order:
             cls = KTH_CLASSES[i]
             disp = KTH_DISPLAY[cls]
             tag = ""
             if i == pred_idx:
-                tag = " ← predicție"
+                tag = " ← predictie"
             if i == gt_label and i != pred_idx:
                 tag = " ← ground truth"
             st.progress(int(probs[i] * 100), text=f"{disp}: {probs[i]*100:.1f}%{tag}")
 
-    st.subheader("3. Frame-uri sursă (cu Bounding Box)")
+    st.subheader("3. Frame-uri sursa (cu Bounding Box)")
     video_path = Path(VIDEO_ROOT) / selected_meta["video_key"]
     if video_path.exists():
         frame_indices = selected_meta["frame_indices"]
@@ -293,5 +277,5 @@ if run:
 
 st.divider()
 st.caption(
-    "Aplicație construită ca demonstrator practic pentru lucrarea de licență."
+    "Aplicatie construita ca demonstrator practic pentru lucrarea de licenta."
 )

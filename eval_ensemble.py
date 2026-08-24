@@ -169,7 +169,7 @@ def main():
     delta = ens_acc - max(100.0 * c / max(total, 1) for c in individual_correct)
     print(
         f"\nEnsemble (mean {args.ensemble_mode}): {ens_acc:.2f}%   "
-        f"(Δ over best single: {delta:+.2f}%)"
+        f"(delta over best single: {delta:+.2f}%)"
     )
 
     print("\nEnsemble confusion matrix (rows=true, cols=pred):")
