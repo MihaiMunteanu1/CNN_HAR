@@ -159,7 +159,7 @@ with st.sidebar.expander("Despre arhitectura"):
 - **HARConv3DNet** — 3 blocuri Conv3D (kernel 3×3×3) peste tensor `(C={sample_shape[1]}, T={sample_shape[0]}, H={sample_shape[2]}, W={sample_shape[3]})`
 - Trainable params: **{n_params/1e6:.2f}M**
 - Split tvt (8/8/9 subiecti): train 11-18, val {{19,20,21,23,24,25,1,4}}, test {{2,3,5,6,7,8,9,10,22}}
-- Augmentari: mixup α=0.02, Gaussian noise, label smoothing 0.02
+- Augmentari: 8 variante/video, doar pe train (flip orizontal, jitter bbox, brightness/gamma, blur+noise)
 """
     )
 
